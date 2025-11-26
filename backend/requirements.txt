@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+qiskit
+qiskit-aer
+qiskit-algorithms
+python-multipart
+sympy
+tweedledum; sys_platform != 'win32'
+# tweedledum is often required for PhaseOracle but can be tricky on Windows. 
+# If PhaseOracle fails, we might need to look into alternatives or pre-compiled wheels, 
+# but let's try standard install first.
