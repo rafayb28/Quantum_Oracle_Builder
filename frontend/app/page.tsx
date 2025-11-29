@@ -23,6 +23,7 @@ ChartJS.register(
 
 export default function Home() {
   const [expression, setExpression] = useState("(A | B) & (~A | C)");
+  const [unknownMode, setUnknownMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState("");
@@ -37,7 +38,7 @@ export default function Home() {
       const res = await fetch("http://127.0.0.1:8000/solve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expression }),
+        body: JSON.stringify({ expression, unknown_solutions: unknownMode }),
       });
 
       if (!res.ok) {
@@ -101,6 +102,18 @@ export default function Home() {
                 placeholder="(A | B) & (~A | C)"
                 className="w-full px-6 py-4 text-lg border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-mono bg-gray-50 transition-all"
               />
+              <div className="mt-3 flex items-center">
+                <input
+                  id="unknownMode"
+                  type="checkbox"
+                  checked={unknownMode}
+                  onChange={(e) => setUnknownMode(e.target.checked)}
+                  className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                />
+                <label htmlFor="unknownMode" className="ml-2 block text-sm text-gray-700 font-medium uppercase tracking-wide">
+                  Unknown Solution Mode (Group Req)
+                </label>
+              </div>
             </div>
             <button
               type="submit"
@@ -167,7 +180,7 @@ export default function Home() {
                 Probability Distribution
               </h2>
               <div className="relative h-64 w-full">
-                {chartData && (
+                {chartData ? (
                   <Bar
                     data={chartData}
                     options={{
@@ -196,6 +209,10 @@ export default function Home() {
                       },
                     }}
                   />
+                ) : (
+                    <div className="flex items-center justify-center h-full text-gray-400 italic">
+                        Histogram not available in Unknown Mode
+                    </div>
                 )}
               </div>
             </div>

@@ -1,9 +1,10 @@
 import math
+import random
+import os
+os.environ['QISKIT_PARALLEL'] = 'False'
+
 from qiskit import QuantumCircuit, transpile
 from qiskit_aer import AerSimulator
-from qiskit_aer.primitives import Sampler
-from qiskit.circuit.library import PhaseOracle
-from qiskit_algorithms import Grover, AmplificationProblem
 from sympy import symbols, Not, Or, And, to_cnf
 from sympy.parsing.sympy_parser import parse_expr
 import re
@@ -11,7 +12,6 @@ import re
 class SatOracleBuilder:
     def __init__(self):
         self.simulator = AerSimulator()
-        self.sampler = Sampler()
 
     def parse_expression(self, expression_string):
         # extract all unique alphabetic sequences as variables
@@ -113,13 +113,16 @@ class SatOracleBuilder:
         return qc, list(range(num_vars))
 
     def solve_quantum(self, expression_string, iterations=None):
+        """
+        Uses Grover's algorithm to find a solution.
+        """
+        # 1. Create Oracle
         try:
             oracle_qc, objective_qubits = self.build_oracle_circuit(expression_string)
         except Exception as e:
             raise ValueError(f"Error creating Oracle: {e}")
 
-        problem = AmplificationProblem(oracle=oracle_qc, objective_qubits=objective_qubits)
-        
+        # 2. Determine Iterations
         if iterations is None:
             solutions = self.solve_classically(expression_string)
             M = len(solutions)
@@ -130,23 +133,40 @@ class SatOracleBuilder:
                 theta = math.asin(math.sqrt(M / N))
                 iterations = max(1, int(round((math.pi / (4 * theta)) - 0.5)))
         
-        grover = Grover(sampler=self.sampler, iterations=iterations)
-        result = grover.amplify(problem)
+        # 3. Construct Circuit
+        qc = self.construct_grover_circuit(oracle_qc, objective_qubits, iterations)
+        
+        # 4. Run
+        qc = transpile(qc, self.simulator)
+        job = self.simulator.run(qc, shots=1024)
+        result = job.result()
+        counts = result.get_counts()
+        
+        # Find top measurement
+        top_measurement = max(counts, key=counts.get)
+        # Qiskit counts keys are already the measured bits (reversed? No, measure maps q_i to c_i)
+        # But qiskit prints 'c_n...c_0'.
+        # My measure: qc.measure(objective_qubits, range(len(objective_qubits)))
+        # objective_qubits are [0, 1, ... k].
+        # So q0 -> c0, q1 -> c1.
+        # Result string '10' means c1=1, c0=0.
+        # This matches standard qiskit bitstring order.
         
         return {
-            "top_measurement": result.top_measurement,
+            "top_measurement": top_measurement,
             "iterations_used": iterations,
             "oracle_qubits": oracle_qc.num_qubits
         }
 
     def get_histogram_data(self, expression_string, iterations=None):
+        """
+        Runs the Grover circuit and returns histogram data for the frontend.
+        """
         try:
             oracle_qc, objective_qubits = self.build_oracle_circuit(expression_string)
         except:
              return {}
 
-        problem = AmplificationProblem(oracle=oracle_qc, objective_qubits=objective_qubits)
-        
         if iterations is None:
              solutions = self.solve_classically(expression_string)
              M = len(solutions)
@@ -156,30 +176,18 @@ class SatOracleBuilder:
                 theta = math.asin(math.sqrt(M / N))
                 iterations = max(1, int(round((math.pi / (4 * theta)) - 0.5)))
 
-        grover = Grover(sampler=self.sampler, iterations=iterations)
-        circuit = grover.construct_circuit(problem, power=iterations)
-        circuit.measure_all()
+        qc = self.construct_grover_circuit(oracle_qc, objective_qubits, iterations)
         
-        circuit = transpile(circuit, self.simulator)
-        
-        job = self.simulator.run(circuit, shots=1024)
+        qc = transpile(qc, self.simulator)
+        job = self.simulator.run(qc, shots=1024)
         result = job.result()
         counts = result.get_counts()
         
-        processed_counts = {}
-        num_vars = len(objective_qubits)
-        
-        for bitstring, count in counts.items():
-            # qiskit bitstring order is reversed (q_n ... q_0)
-            # objective qubits are 0..num_vars-1 (the lower indices)
-            var_part = bitstring[-num_vars:]
-            processed_counts[var_part] = processed_counts.get(var_part, 0) + count
-            
-        return processed_counts
+        # Counts are already just the measured bits because we only measured objective_qubits
+        return counts
 
     def debug_circuit(self, expression_string):
         oracle_qc, objective_qubits = self.build_oracle_circuit(expression_string)
-        problem = AmplificationProblem(oracle=oracle_qc, objective_qubits=objective_qubits)
         # Calculate iterations
         solutions = self.solve_classically(expression_string)
         M = len(solutions)
@@ -189,6 +197,140 @@ class SatOracleBuilder:
             theta = math.asin(math.sqrt(M / N))
             iterations = max(1, int(round((math.pi / (4 * theta)) - 0.5)))
             
-        grover = Grover(iterations=iterations)
-        circuit = grover.construct_circuit(problem, power=iterations)
+        circuit = self.construct_grover_circuit(oracle_qc, objective_qubits, iterations)
         return circuit
+
+    def solve_unknown(self, expression_string):
+        """
+        Solves the SAT problem without knowing the number of solutions beforehand.
+        Uses the exponential search strategy (Boyer et al.) for Grover's algorithm.
+        """
+        expr, var_names = self.parse_expression(expression_string)
+        num_vars = len(var_names)
+        N = 2**num_vars
+        
+        try:
+            oracle_qc, objective_qubits = self.build_oracle_circuit(expression_string)
+        except Exception as e:
+            raise ValueError(f"Error creating Oracle: {e}")
+
+        # Boyer et al. algorithm parameters
+        m = 1.0
+        lam = 1.2 # Growth factor
+        
+        # We limit the search to avoid infinite loops. 
+        # If we exceed approx sqrt(N) * few attempts, we assume no solution.
+        max_m = math.sqrt(N) * 2.0
+        
+        attempts = 0
+        
+        while m <= max_m:
+            attempts += 1
+            # 1. Pick random iterations 1 <= j <= m
+            iterations = random.randint(1, max(1, int(m)))
+            
+            # 2. Run Grover
+            qc = self.construct_grover_circuit(oracle_qc, objective_qubits, iterations)
+            qc = transpile(qc, self.simulator)
+            job = self.simulator.run(qc, shots=1024)
+            result = job.result()
+            counts = result.get_counts()
+            
+            top_measurement = max(counts, key=counts.get)
+            
+            # 3. Verify Solution Classically
+            # Qiskit string is q_n ... q_0 (reversed)
+            # My vars are mapped q_0 ... q_n
+            assignment = {}
+            for i, name in enumerate(var_names):
+                # q_i is at index -(i+1) in top_measurement
+                val = int(top_measurement[-(i+1)])
+                assignment[name] = val
+            
+            if expr.subs(assignment):
+                # generate histogram with the successful iteration count
+                histogram = self.get_histogram_with_iterations(expression_string, iterations)
+                
+                return {
+                    "solution": top_measurement,
+                    "iterations_used": iterations,
+                    "found": True,
+                    "attempts": attempts,
+                    "histogram": histogram,
+                    "message": "Solution found using randomized Grover search."
+                }
+            
+            # 4. Increase m
+            m = m * lam
+            
+        return {
+            "found": False,
+            "attempts": attempts,
+            "histogram": None,
+            "message": "No solution found within search limits."
+        }
+    
+    def get_histogram_with_iterations(self, expression_string, iterations):
+        """
+        Runs Grover circuit with specified iterations and returns histogram.
+        """
+        try:
+            oracle_qc, objective_qubits = self.build_oracle_circuit(expression_string)
+        except:
+            return {}
+
+        qc = self.construct_grover_circuit(oracle_qc, objective_qubits, iterations)
+        qc = transpile(qc, self.simulator)
+        
+        job = self.simulator.run(qc, shots=1024)
+        result = job.result()
+        counts = result.get_counts()
+        
+        return counts
+    
+    def add_diffuser(self, qc, target_qubits):
+        """
+        Appends the Grover Diffuser operator to the circuit.
+        """
+        # Apply H to all target qubits
+        qc.h(target_qubits)
+        
+        # Apply X to all target qubits
+        qc.x(target_qubits)
+        
+        # Apply Multi-Controlled Z (MCP with pi)
+        # Controls: all except last
+        # Target: last
+        if len(target_qubits) > 1:
+            qc.mcp(math.pi, target_qubits[:-1], target_qubits[-1])
+        elif len(target_qubits) == 1:
+            qc.z(target_qubits[0])
+            
+        # Apply X to all target qubits
+        qc.x(target_qubits)
+        
+        # Apply H to all target qubits
+        qc.h(target_qubits)
+
+    def construct_grover_circuit(self, oracle_qc, objective_qubits, iterations):
+        """
+        Constructs the full Grover circuit.
+        """
+        num_qubits = oracle_qc.num_qubits
+        qc = QuantumCircuit(num_qubits, len(objective_qubits))
+        
+        # 1. Initialize: H on all objective qubits
+        qc.h(objective_qubits)
+        
+        # 2. Grover Iterations
+        for _ in range(iterations):
+            # Apply Oracle
+            qc.compose(oracle_qc, inplace=True)
+            
+            # Apply Diffuser
+            self.add_diffuser(qc, objective_qubits)
+            
+        # 3. Measure
+        qc.measure(objective_qubits, range(len(objective_qubits)))
+        
+        return qc
