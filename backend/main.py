@@ -4,10 +4,8 @@ from pydantic import BaseModel
 import uvicorn
 import traceback
 
-try:
-    from .logic import SatOracleBuilder
-except ImportError:
-    from logic import SatOracleBuilder
+from .logic import SatOracleBuilder
+
 
 app = FastAPI()
 
@@ -20,54 +18,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-solver = None
+solver = SatOracleBuilder()
 
-@app.on_event("startup")
-def startup_event():
-    global solver
-    solver = SatOracleBuilder()
 
 class SatRequest(BaseModel):
     expression: str
-    unknown_solutions: bool = False
+
 
 @app.post("/solve")
 def solve_sat(request: SatRequest):
-    global solver
     try:
         print(f"Received request: {request.expression}")
-        
-        # classical validation (always run for reference/grading)
+
+        # classical validation
         classical_solutions = solver.solve_classically(request.expression)
-        print(f"Classical solutions: {classical_solutions}")
         num_solutions = len(classical_solutions)
-        num_solutions = len(classical_solutions)
-        
+
+        # quantum solving
+        result = solver.solve_quantum(request.expression)
+
         result_data = {
             "classical_solutions": classical_solutions,
             "num_solutions": num_solutions,
-            "histogram": None,
-            "top_measurement": None,
-            "method": "classical_optimized"
+            "counts": result.get("counts"),
+            "top_measurement": result["solution"],
         }
-
-        if request.unknown_solutions:
-            # Group Requirement: Solve without knowing N
-            quantum_result = solver.solve_unknown(request.expression)
-            result_data["top_measurement"] = quantum_result["solution"] if quantum_result["found"] else None
-            result_data["method"] = "unknown_solutions_randomized"
-            result_data["quantum_details"] = quantum_result
-            result_data["histogram"] = quantum_result.get("histogram")
-        else:
-            # Standard "A" Grade Path: Use classical count to optimize
-            histogram = solver.get_histogram_data(request.expression)
-            if histogram:
-                top_measurement = max(histogram, key=histogram.get)
-            else:
-                top_measurement = None
-            
-            result_data["histogram"] = histogram
-            result_data["top_measurement"] = top_measurement
 
         return result_data
 
@@ -75,9 +50,6 @@ def solve_sat(request: SatRequest):
         traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/")
-def read_root():
-    return {"message": "SAT Oracle Builder Backend is running"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
