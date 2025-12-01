@@ -34,8 +34,13 @@ def solve_sat(request: SatRequest):
         classical_solutions = solver.solve_classically(request.expression)
         num_solutions = len(classical_solutions)
 
-        # quantum solving
-        result = solver.solve_quantum(request.expression)
+        # quantum solving - we are not guaranteed to find a solution on
+        # first try, so run up to 3 times if needed
+        max_attempts = 3
+        for _ in range(max_attempts):
+            result = solver.solve_quantum(request.expression)
+            if result["solution"]:
+                break
 
         result_data = {
             "classical_solutions": classical_solutions,
