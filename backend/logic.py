@@ -72,8 +72,8 @@ class SatOracleBuilder:
 
         while m <= max_m:
             attempts += 1
-            # 1. pick random iterations [0, m-1]
-            iterations = random.randint(0, int(m) - 1)
+            # 1. pick random iterations in [1, m]
+            iterations = random.randint(1, max(1, int(m)))
 
             # 2. run grover
             qc = self.construct_grover_circuit(oracle_qc, objective_qubits, iterations)
