@@ -14,6 +14,11 @@ class SatOracleBuilder:
     def parse_expression(self, expression_string) -> tuple:
         """
         Parses a boolean expression string into a sympy expression and extracts variable names
+
+        Args:
+            expression_string (str): boolean expression, e.g. "(A | ~B) & (B | C)"
+        Returns:
+            tuple: (sympy parsed expression, list of variables)
         """
         # extract all a-z, A-Z
         variables = sorted(list(set(re.findall(r"[a-zA-Z]+", expression_string))))
@@ -33,6 +38,11 @@ class SatOracleBuilder:
     def solve_classically(self, expression_string) -> list:
         """
         Classically solves the SAT problem by brute force
+
+        Args:
+            expression_string (str): boolean expression, e.g. "(A | ~B) & (B | C)"
+        Returns:
+            list: all satisfying assignments as binary strings
         """
         expr, variables = self.parse_expression(expression_string)
         num_vars = len(variables)
@@ -52,7 +62,12 @@ class SatOracleBuilder:
 
     def solve_quantum(self, expression_string):
         """
-        Solves the SAT problem using Grover's algorithm without knowing the number of solutions in advance.
+        Solves the SAT problem using Grover's algorithm without knowing the number of solutions in advance
+
+        Args:
+            expression_string (str): boolean expression, e.g. "(A | ~B) & (B | C)"
+        Returns:
+            dict: a dictionary containing results and metadata
         """
         expr, variables = self.parse_expression(expression_string)
         num_vars = len(variables)
@@ -117,9 +132,15 @@ class SatOracleBuilder:
 
     def build_oracle_circuit(self, expr, variables):
         """
-        Builds a quantum oracle circuit in CNF form for the given SAT expression.
+        Builds a quantum oracle circuit in CNF form for the given SAT expression
+
+        Args:
+            expr: sympy boolean expression
+            variables: list of variables
+        Returns:
+            tuple: (QuantumCircuit oracle, list of objective qubits)
         """
-        cnf_expr = to_cnf(expr, simplify=True)
+        cnf_expr = to_cnf(expr, simplify=True)  # AND of ORs
 
         if isinstance(cnf_expr, And):  # multiple clauses
             clauses = cnf_expr.args
@@ -128,8 +149,8 @@ class SatOracleBuilder:
 
         num_clauses = len(clauses)
         num_vars = len(variables)
-        qc = QuantumCircuit(num_vars + num_clauses)
-        clause_qubits = list(range(num_vars, num_vars + num_clauses))  # ancilla qubits
+        qc = QuantumCircuit(num_vars + num_clauses)  # A, B, ... + ancillas (clauses)
+        clause_qubits = list(range(num_vars, num_vars + num_clauses))
 
         # compute all clauses
         for i, clause in enumerate(clauses):
@@ -150,7 +171,13 @@ class SatOracleBuilder:
 
     def apply_clause(self, clause, variables, target_qubit, qc):
         """
-        Applies the clause logic to the target qubit
+        Applies the clause logic to the target qubit, flipping it iff the clause is satisfied
+
+        Args:
+            clause: sympy clause (Or of literals / single literal)
+            variables: list of variables
+            target_qubit: index of the target qubit to flip if the clause is satisfied
+            qc: QuantumCircuit to apply the clause to
         """
         if isinstance(clause, Or):  # multiple literals
             literals = clause.args
@@ -188,7 +215,14 @@ class SatOracleBuilder:
 
     def construct_grover_circuit(self, oracle_qc, objective_qubits, iterations):
         """
-        Constructs the full Grover circuit.
+        Constructs a Grover circuit for the given oracle and iteration count
+
+        Args:
+            oracle_qc: QuantumCircuit oracle
+            objective_qubits: list of qubits to measure
+            iterations: number of iterations
+        Returns:
+            QuantumCircuit: complete Grover circuit
         """
         num_qubits = oracle_qc.num_qubits
         qc = QuantumCircuit(num_qubits, len(objective_qubits))
@@ -205,7 +239,11 @@ class SatOracleBuilder:
 
     def add_diffuser(self, qc, target_qubits):
         """
-        Appends the Grover Diffuser operator to the circuit.
+        Appends diffuser to the circuit on the target qubits
+
+        Args:
+            qc: QuantumCircuit to append to
+            target_qubits: list of qubits to apply diffuser on
         """
         qc.h(target_qubits)
         qc.x(target_qubits)
