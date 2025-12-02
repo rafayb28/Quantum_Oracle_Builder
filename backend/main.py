@@ -7,7 +7,7 @@ import traceback
 from .logic import SatOracleBuilder
 
 
-app = FastAPI()
+app = FastAPI(root_path="/api")
 
 # Allow CORS for frontend
 app.add_middleware(
